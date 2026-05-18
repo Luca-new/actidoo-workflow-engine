@@ -7,7 +7,7 @@ import uuid
 from typing import List, Sequence
 
 from sqlalchemy import and_, delete, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from actidoo_wfe.database import eilike, search_uuid_by_prefix
 from actidoo_wfe.helpers.time import dt_now_naive
@@ -81,6 +81,18 @@ def upsert_user(
 
     db.flush()
     db.expire(user)
+
+    # Eager-load `user.roles` and the nested `role` of each association so
+    # callers that detach the user (BFF/API dependencies that close their
+    # own session before returning) can still read `user.roles`.
+    db.execute(
+        select(WorkflowUser)
+        .where(WorkflowUser.id == user.id)
+        .options(
+            selectinload(WorkflowUser.roles).joinedload(WorkflowUserRole.role),
+        )
+        .execution_options(populate_existing=True),
+    ).scalar_one()
 
     return user
 
