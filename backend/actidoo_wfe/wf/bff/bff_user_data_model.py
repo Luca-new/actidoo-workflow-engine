@@ -98,26 +98,34 @@ def _serialize_row(row: Any, fields: list[str | VirtualField] | None = None) -> 
     return result
 
 
+def _attach_user(user, db: Session):
+    """Re-attach a (possibly detached) ``user`` to the current request-scoped
+    session. ``get_user`` closes its own session before returning, so without
+    this re-attach any lazy-load on ``user`` raises ``DetachedInstanceError``.
+    """
+    return db.merge(user, load=False)
+
+
 def _user_has_read_access(user, descriptor: DataModelDescriptor, db: Session) -> bool:
-    """Check if the user has read access to this workflow-data model."""
+    """Check if the user has read access. Caller must pass an attached user."""
     if not descriptor.api:
         return False
     if not descriptor.api.read_roles:
         return True
-    # `user` arrives detached from get_user (its own session was closed and
-    # expire_on_commit cleared every attribute). Re-attach to the current
-    # request-scoped session so `user.roles` can lazy-load.
-    user = db.merge(user, load=False)
     user_roles = {r.role.name for r in user.roles}
     return bool(user_roles & set(descriptor.api.read_roles))
 
 
-def _require_read_access(user, descriptor: DataModelDescriptor, db: Session) -> None:
-    """Raise 404/403 if user lacks read access."""
+def _require_read_access(user, descriptor: DataModelDescriptor, db: Session):
+    """Raise 404/403 if the user lacks read access. Returns the (attached) user
+    so callers can keep using it for downstream operations like ``row_filter``.
+    """
+    user = _attach_user(user, db)
     if not _user_has_read_access(user, descriptor, db):
         if not descriptor.api:
             raise HTTPException(status_code=404, detail="Model not found or not exposed via API")
         raise HTTPException(status_code=403, detail="Insufficient permissions")
+    return user
 
 
 def _require_wf_user(request: Request):
@@ -138,6 +146,7 @@ def list_models(
     db: Session = Depends(get_db),
 ):
     """List workflow-data models the current user can access, including column metadata."""
+    user = _attach_user(user, db)
     return [{"name": d.name, "columns": _fields_metadata(d)} for d in data_model_registry.list_models() if d.api and _user_has_read_access(user, d, db)]
 
 
@@ -157,7 +166,7 @@ def list_rows(
     except DataModelNotFoundError:
         raise HTTPException(status_code=404, detail=f"Data model '{model_name}' not found")
 
-    _require_read_access(user, descriptor, db)
+    user = _require_read_access(user, descriptor, db)
 
     page = max(1, page)
     effective_page_size = min(
@@ -209,7 +218,7 @@ def get_version_chain(
     except DataModelNotFoundError:
         raise HTTPException(status_code=404, detail=f"Data model '{model_name}' not found")
 
-    _require_read_access(user, descriptor, db)
+    user = _require_read_access(user, descriptor, db)
 
     model_class = descriptor.model_class
 
