@@ -6,7 +6,7 @@ import logging
 import uuid
 from typing import List, Sequence
 
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import and_, delete, null, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from actidoo_wfe.database import eilike, search_uuid_by_prefix
@@ -273,7 +273,7 @@ def get_active_principals_for_delegate(
     principal_ids = db.execute(
         select(WorkflowUserDelegate.principal_user_id).where(
             WorkflowUserDelegate.delegate_user_id == delegate_user_id,
-            or_(WorkflowUserDelegate.valid_until == None, WorkflowUserDelegate.valid_until >= now),
+            or_(WorkflowUserDelegate.valid_until == null(), WorkflowUserDelegate.valid_until >= now),
         ),
     ).scalars()
     return {pid for pid in principal_ids}
@@ -290,7 +290,7 @@ def is_active_delegate_for(
         select(WorkflowUserDelegate.id).where(
             WorkflowUserDelegate.principal_user_id == principal_user_id,
             WorkflowUserDelegate.delegate_user_id == delegate_user_id,
-            or_(WorkflowUserDelegate.valid_until == None, WorkflowUserDelegate.valid_until >= now),
+            or_(WorkflowUserDelegate.valid_until == null(), WorkflowUserDelegate.valid_until >= now),
         ),
     ).first()
     return exists is not None
