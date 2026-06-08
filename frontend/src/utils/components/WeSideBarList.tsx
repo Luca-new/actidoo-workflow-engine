@@ -225,7 +225,12 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
       ) : (
         <div className="p-12 flex items-center gap-2">
           <Icon name="activity-2" />
-          <Text> {props.emptyMessage ?? t('sidebar.noItems')}</Text>
+          <Text>
+            {' '}
+            {debouncedSearch
+              ? t('sidebar.noSearchResults')
+              : props.emptyMessage ?? t('sidebar.noItems')}
+          </Text>
         </div>
       )}
     </div>
