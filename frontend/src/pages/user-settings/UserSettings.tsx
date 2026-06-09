@@ -354,14 +354,6 @@ const UserSettings: React.FC = () => {
               onClick={handleAddDelegation}>
               {t('userSettings.delegations.add')}
             </Button>
-            <Button
-              design={ButtonDesign.Transparent}
-              onClick={() => {
-                setPendingDelegate({});
-                setPendingValidUntil('');
-              }}>
-              {t('userSettings.delegations.resetSelection')}
-            </Button>
           </div>
           {isDuplicatePendingDelegate ? (
             <Text className="text-xs text-red-500">
