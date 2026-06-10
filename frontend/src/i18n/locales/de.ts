@@ -363,8 +363,12 @@ export const de = {
   },
   sidebar: {
     loadingError: 'Beim Laden der Liste ist etwas schiefgelaufen. Bitte versuche es erneut.',
+    loadMoreError: 'Weitere Einträge konnten nicht geladen werden.',
     noItems: 'Keine Einträge gefunden.',
+    noSearchResults: 'Die Suche hat keine übereinstimmenden Aufgaben gefunden.',
     taskCount: '{{count}} Aufgabe{{suffix}}:',
+    searchPlaceholder: 'Suchen …',
+    loadMore: 'Mehr laden',
   },
   table: {
     loadingError:
