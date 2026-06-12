@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025 ActiDoo GmbH
 
+import base64
+import binascii
 import dataclasses
 import datetime
 import logging
@@ -26,18 +28,57 @@ log = logging.getLogger(__name__)
 _member_seperator: str = "___"
 
 
-def encode_cursor(id_: uuid.UUID) -> str:
-    """Encode a keyset cursor token from a row id."""
-    return id_.hex
+@dataclasses.dataclass(frozen=True)
+class CursorPosition:
+    """A keyset position: the sort value and the id of the last delivered row."""
+
+    sort_value: datetime.datetime  # aware UTC, second granularity (TIMESTAMP fsp=0)
+    id: uuid.UUID
 
 
-def decode_cursor(token: Optional[str]) -> Optional[uuid.UUID]:
-    """Parse a cursor token into a row id; None for a missing/malformed token."""
+def encode_cursor(sort_value: datetime.datetime, id_: uuid.UUID) -> str:
+    """Encode a keyset cursor token from the position ``(sort_value, id)``.
+
+    The token is opaque and untrusted: it carries ONLY a position, never
+    authorization — the query is user-scoped before the keyset WHERE is applied,
+    so a manipulated token can at most slice the caller's own list differently.
+    That is why it is not signed. Carrying the full position (instead of an id
+    that is looked up server-side) avoids an extra query per page, closes the
+    existence oracle a bare-id lookup would open, and makes a deleted cursor row
+    a non-event: the position stays valid.
+
+    The sort value is encoded as epoch *seconds* because the backing column is a
+    MySQL TIMESTAMP without fractional seconds — sub-second precision would be
+    pretense; ties within a second are resolved by the id part. base64url keeps
+    the opacity visible to clients.
+    """
+    if sort_value.tzinfo is None:
+        sort_value = sort_value.replace(tzinfo=datetime.timezone.utc)
+    # Defensive: identity-map instances may still carry sub-second precision the
+    # database would have truncated.
+    epoch_seconds = int(sort_value.replace(microsecond=0).timestamp())
+    raw = f"{epoch_seconds}|{id_.hex}"
+    return base64.urlsafe_b64encode(raw.encode("ascii")).decode("ascii").rstrip("=")
+
+
+def decode_cursor(token: Optional[str]) -> Optional[CursorPosition]:
+    """Parse a cursor token into a position; ``None`` for missing/malformed tokens
+    (paging then restarts from the first page). Strict on purpose — including
+    tokens of the former id-only format."""
     if not token:
         return None
     try:
-        return uuid.UUID(hex=token)
-    except (ValueError, TypeError):
+        padded = token + "=" * (-len(token) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii")
+        epoch_part, _, id_part = raw.partition("|")
+        if not id_part or "|" in id_part:
+            return None
+        epoch_seconds = int(epoch_part)
+        if epoch_seconds < 0 or len(id_part) != 32:
+            return None
+        sort_value = datetime.datetime.fromtimestamp(epoch_seconds, tz=datetime.timezone.utc)
+        return CursorPosition(sort_value=sort_value, id=uuid.UUID(hex=id_part))
+    except (ValueError, TypeError, OverflowError, binascii.Error):
         return None
 
 
@@ -333,7 +374,7 @@ class BffTableQuerySchemaBase(pydantic.v1.BaseModel):
     def get_limit(self):
         return get_min_max(getattr(self, "limit", None), maxv=200, default=100, minv=1)
 
-    def get_cursor(self) -> Optional[uuid.UUID]:
+    def get_cursor(self) -> Optional[CursorPosition]:
         return decode_cursor(getattr(self, "cursor", None))
 
     def get_filter_fields(self) -> List[FilterField]:
@@ -347,7 +388,10 @@ class PaginatedData:
 
 
 @dataclasses.dataclass
-class CursorPaginatedData(PaginatedData):
+class CursorPaginatedData:
+    """Cursor pages deliberately carry no total count (see :class:`CursorBFFTable`)."""
+
+    items: list
     next_cursor: Optional[str] = None
 
 
@@ -511,8 +555,12 @@ class BFFTable:
 class CursorBFFTable(BFFTable):
     """Keyset (cursor) pagination variant of :class:`BFFTable`.
 
-    Slices by a stable cursor on ``(cursor_sort, cursor_id)`` ordered DESC.
-    Filtering, search and counting are inherited unchanged.
+    Slices by a stable cursor on ``(cursor_sort, cursor_id)`` ordered DESC; the
+    token carries the full position, so no lookup query is needed and a deleted
+    cursor row is a non-event (the position stays a valid slice point in the
+    caller's own scope). Filtering and search are inherited unchanged; the total
+    count is deliberately NOT computed — an endless list has no use for it and
+    the count query would run on every scroll fetch.
     """
 
     def __init__(
@@ -538,39 +586,36 @@ class CursorBFFTable(BFFTable):
     def _order_by_clauses(self):
         return [self.cursor_sort.desc(), self.cursor_id.desc()]
 
-    def _resolve_cursor_position(self):
-        # Token carries only the id; look up its sort value. None if no cursor
-        # or the row is gone (then paging restarts from the beginning).
-        cursor_id_value = self.request_params.get_cursor()
-        if cursor_id_value is None:
-            return None
-        sort_value = self.db.execute(
-            select(self.cursor_sort).where(self.cursor_id == cursor_id_value),
-        ).scalar_one_or_none()
-        if sort_value is None:
-            return None
-        return (sort_value, cursor_id_value)
-
     def _paginate(self, query: Select) -> Select:
-        position = self._resolve_cursor_position()
+        position = self.request_params.get_cursor()
         if position is not None:
-            sort_value, id_value = position
             query = query.where(
                 or_(
-                    self.cursor_sort < sort_value,
-                    and_(self.cursor_sort == sort_value, self.cursor_id < id_value),
+                    self.cursor_sort < position.sort_value,
+                    and_(self.cursor_sort == position.sort_value, self.cursor_id < position.id),
                 ),
             )
-        return query.limit(self.request_params.get_limit())
+        # Fetch one row more than requested: its presence is the has-more signal,
+        # so an exactly-full last page yields no token (no empty extra request).
+        return query.limit(self.request_params.get_limit() + 1)
 
-    def _make_result(self, items: list, count: int) -> CursorPaginatedData:
-        return CursorPaginatedData(items=items, count=count, next_cursor=self._next_cursor(items))
+    def get_paginated_data(self) -> CursorPaginatedData:
+        """The requested page plus the next-page token — without a total count."""
+        limit = self.request_params.get_limit()
+        rows = list(self._get_scalars().all())
+        has_more = len(rows) > limit
+        items = rows[:limit]
+        return CursorPaginatedData(
+            items=items,
+            next_cursor=self._next_cursor(items) if has_more else None,
+        )
 
     def _next_cursor(self, items: list) -> Optional[str]:
-        # No token on a non-full page: nothing left to fetch.
-        if not items or len(items) < self.request_params.get_limit():
-            return None
-        return encode_cursor(getattr(items[-1], self.cursor_id.key))
+        last = items[-1]
+        return encode_cursor(
+            getattr(last, self.cursor_sort.key),
+            getattr(last, self.cursor_id.key),
+        )
 
 
 def get_bff_table_query_schema(
@@ -582,8 +627,6 @@ def get_bff_table_query_schema(
     query_params_definition: dict[str, Any] = {
         "limit": (Optional[int], None),
         "offset": (Optional[int], None),
-        # Keyset cursor; only used by cursor-paginated endpoints.
-        "cursor": (Optional[str], None),
     }
 
     sorting_enum_values = dict()
@@ -619,6 +662,40 @@ def get_bff_table_query_schema(
 
     # model = create_model()
     return model
+
+
+def get_cursor_bff_table_query_schema(
+    schema_name: str,
+    filter_fields: List[FilterField],
+    add_global_search_filter: bool,
+):
+    """Query schema for keyset/cursor-paginated endpoints: ``limit + cursor``
+    (+ ``search``), and nothing else.
+
+    Deliberately no ``sort``, ``offset`` or per-field ``f_*`` params: the keyset
+    order is fixed by the endpoint, so advertising column sorting would be a
+    broken promise — an endpoint must only offer parameters it honors. The
+    *filter_fields* are still needed, but only to build the global-search OR
+    clause; their per-field GET params are not registered (without the matching
+    attributes their ``add_database_query_parameters`` is a no-op).
+    """
+    query_params_definition: dict[str, Any] = {
+        "limit": (Optional[int], None),
+        "cursor": (Optional[str], None),
+    }
+
+    if add_global_search_filter:
+        query_params_definition["search"] = (Optional[str], None)
+
+    class MyCursorBffTableQuerySchemaBase(BffTableQuerySchemaBase):
+        def get_filter_fields(self):
+            return filter_fields
+
+    return pydantic.v1.create_model(
+        schema_name,
+        __base__=MyCursorBffTableQuerySchemaBase,
+        **query_params_definition,
+    )
 
 
 @lru_cache(maxsize=256)
