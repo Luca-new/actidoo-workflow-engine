@@ -101,6 +101,7 @@ export interface WorkflowInstance {
   title?: string;
   subtitle?: string;
   is_completed?: boolean;
+  created_at?: string;
   active_tasks?: ActiveTaskInstance[];
   completed_tasks?: ActiveTaskInstance[];
   is_readonly?: boolean;

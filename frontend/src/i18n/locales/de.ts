@@ -368,6 +368,8 @@ export const de = {
     noItems: 'Keine Einträge gefunden.',
     noSearchResults: 'Die Suche hat keine übereinstimmenden Aufgaben gefunden.',
     taskCount: '{{count}} Aufgabe{{suffix}}:',
+    startDate: 'Eingangsdatum',
+    workFlowInstanceID: 'Workflow Instanze ID',
     searchPlaceholder: 'Suchen …',
     loadMore: 'Mehr laden',
     retry: 'Erneut versuchen',

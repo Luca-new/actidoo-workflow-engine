@@ -366,6 +366,8 @@ export const en = {
     noItems: 'No items found.',
     noSearchResults: 'The search found no matching tasks.',
     taskCount: '{{count}} Task{{suffix}}:',
+    startDate: 'Start date',
+    workFlowInstanceID: 'Workflow Instance ID',
     searchPlaceholder: 'Search …',
     loadMore: 'Load more',
     retry: 'Try again',

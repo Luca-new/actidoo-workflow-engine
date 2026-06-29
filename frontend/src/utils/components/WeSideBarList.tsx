@@ -11,14 +11,17 @@ import {
   List,
   MessageStrip,
   MessageStripDesign,
+  ResponsivePopover,
   StandardListItem,
   Text,
+  type ResponsivePopoverDomRef,
 } from '@ui5/webcomponents-react';
 import { useSelector } from 'react-redux';
 import { State } from '@/store';
 import { WeDataKey } from '@/store/generic-data/setup';
 import { useNavigate, useParams } from 'react-router-dom';
 import '@ui5/webcomponents-icons/dist/activity-2.js';
+import '@ui5/webcomponents-icons/dist/message-information.js';
 import '@ui5/webcomponents-icons/dist/search.js';
 import { WorkflowState } from '@/models/models';
 import { useTranslation } from '@/i18n';
@@ -39,6 +42,14 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
   const { t, language } = useTranslation();
   const { workflowId } = useParams();
   const navigate = useNavigate();
+  const [infoContent, setInfoContent] = useState<{
+    title?: string;
+    subtitle?: string;
+    startDate?: string;
+    worfkFlowID: string;
+  } | null>(null);
+
+  const infoPopoverRef = useRef<ResponsivePopoverDomRef | null>(null);
 
   const currentUserId = useSelector((state: State) => state.data[WeDataKey.WFE_USER]?.data?.id);
 
@@ -94,6 +105,17 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
       </Button>
     </div>
   );
+
+  const formatDateTime = (value?: string | Date | null) => {
+    if (!value) return undefined;
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return undefined;
+
+    return new Intl.DateTimeFormat(language === 'de' ? 'de-DE' : language, {
+      dateStyle: 'medium',
+    }).format(date);
+  };
 
   const searchBar = (
     <div className="sticky top-0 z-10 bg-white p-2 border-b border-neutral-200">
@@ -153,6 +175,30 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
       ref={containerRef}
       className={`absolute top-0 bottom-0 overflow-y-auto bg-white ${props.className ?? ''}`}>
       {searchBar}
+      <ResponsivePopover ref={infoPopoverRef} headerText={infoContent?.title} placementType="Right">
+        <div className="flex flex-col">
+          {infoContent?.startDate && (
+            <div className="flex flex-col gap-1 mb-4">
+              <Text className="!text-xs !font-bold !text-neutral-700">
+                {t('sidebar.startDate')}
+              </Text>
+              <Text className="!text-xs !text-neutral-600">{infoContent.startDate}</Text>
+            </div>
+          )}
+          <div className="flex flex-col gap-1 !max-w-[250px] !break-words mb-4">
+            <Text className="!text-xs !font-bold !text-neutral-700">Subtitle</Text>
+            <Text className="!text-xs !text-neutral-600">{infoContent?.subtitle ?? '-'}</Text>
+          </div>
+          {infoContent?.worfkFlowID && (
+            <div className="flex flex-col gap-1">
+              <Text className="!text-xs !font-bold !text-neutral-700">
+                {t('sidebar.workFlowInstanceID')}
+              </Text>
+              <Text className="!text-xs !text-neutral-600">{infoContent?.worfkFlowID}</Text>
+            </div>
+          )}
+        </div>
+      </ResponsivePopover>
       {loadingInitial ? (
         <BusyIndicator
           active={true}
@@ -197,15 +243,34 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
                   onClick={() => {
                     navigate(`${instance.id}`);
                   }}>
-                  <div className="py-2">
-                    <Text className={`${isSelected ? '!font-bold' : ''} ml-1 `}>
-                      {instance.title}
-                    </Text>
-                    {instance.subtitle && (
-                      <Text className={`!text-xs !text-neutral-700  !block ml-1 `}>
-                        {instance.subtitle}
-                      </Text>
-                    )}
+                  <div className="py-3 w-full">
+                    <div className="flex items-start justify-between gap-2 ml-1 pr-5">
+                      <div className="min-w-0">
+                        <Text className={`${isSelected ? '!font-bold' : ''} !block`}>
+                          {instance.title}
+                        </Text>
+                        {instance.subtitle && (
+                          <Text className="!text-xs !text-neutral-700 !block ml-1">
+                            {instance.subtitle}
+                          </Text>
+                        )}
+                      </div>
+                      <Icon
+                        name="message-information"
+                        accessibleName="Mehr Informationen"
+                        className="!w-4 !h-4 relative top-2"
+                        onClick={event => {
+                          event.stopPropagation();
+                          setInfoContent({
+                            title: instance.title,
+                            subtitle: instance.subtitle ?? undefined,
+                            startDate: formatDateTime(instance.created_at),
+                            worfkFlowID: instance.id,
+                          });
+                          void infoPopoverRef.current?.showAt(event.currentTarget, true);
+                        }}
+                      />
+                    </div>
                     {tasks && tasks.length > 0 && (
                       <Text className={`!text-xs !text-neutral-700 !block ml-1 `}>
                         <div className="line-clamp-1">
