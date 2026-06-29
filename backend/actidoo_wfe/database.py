@@ -250,19 +250,20 @@ def _run_with_advisory_lock(engine, lock_name: str, fn):
             conn.execute(text("SELECT RELEASE_LOCK(:name)"), {"name": lock_name})
 
 
-def _run_main_migrations(engine):
-    """Run the main-project Alembic migrations."""
-    with engine.connect() as conn:
-        initialized = conn.execute(
-            text("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'alembic_version'"),
-        ).scalar()
+def _run_main_migrations(engine, fresh_db: bool):
+    """Run the main-project Alembic migrations.
 
+    ``fresh_db`` is captured once in ``run_migrations`` before any migration runs
+    (an empty schema has no ``alembic_version`` table yet). On a fresh database the
+    schema is materialised directly via ``metadata.create_all`` and Alembic is only
+    stamped at head; migrations are replayed solely when upgrading an existing DB.
+    """
     alembic_cfg = alembic.config.Config(attributes={"engine": engine})
 
     if ALEMBIC_PATH.exists():
         alembic_cfg.set_main_option("script_location", str(ALEMBIC_PATH))
 
-        if not initialized:
+        if fresh_db:
             load_all_models()
             metadata.create_all(engine)
             from alembic.command import stamp
@@ -276,8 +277,16 @@ def _run_main_migrations(engine):
         raise Exception("Alembic Path not existing")
 
 
-def _run_extension_migrations(engine, ext_alembic_path, entry_point_name: str):
-    """Run Alembic migrations for a single extension project."""
+def _run_extension_migrations(engine, ext_alembic_path, entry_point_name: str, fresh_db: bool):
+    """Run Alembic migrations for a single extension project.
+
+    Extension models share the main ``metadata``, so a fresh-database run already
+    materialised the extension tables via ``metadata.create_all`` in
+    ``_run_main_migrations``. Mirror the main behaviour: stamp the extension head
+    instead of replaying its migrations against an already-current schema (each
+    extension keeps its own ``version_table``, so the stamp does not collide with
+    the main one). Existing databases still upgrade normally.
+    """
     from pathlib import Path
 
     ext_alembic_path = Path(ext_alembic_path)
@@ -288,10 +297,16 @@ def _run_extension_migrations(engine, ext_alembic_path, entry_point_name: str):
     alembic_cfg = alembic.config.Config(attributes={"engine": engine})
     alembic_cfg.set_main_option("script_location", str(ext_alembic_path))
 
-    from alembic.command import upgrade
+    if fresh_db:
+        from alembic.command import stamp
 
-    upgrade(config=alembic_cfg, revision="head")
-    log.info("Extension migrations '%s' applied successfully.", entry_point_name)
+        stamp(config=alembic_cfg, revision="head")
+        log.info("Extension '%s' stamped at head (fresh database).", entry_point_name)
+    else:
+        from alembic.command import upgrade
+
+        upgrade(config=alembic_cfg, revision="head")
+        log.info("Extension migrations '%s' applied successfully.", entry_point_name)
 
 
 EXTENSION_ALEMBIC_ENTRY_POINT_GROUP = "actidoo_wfe.alembic"
@@ -308,8 +323,21 @@ def run_migrations(settings: Settings):
         connect_args=get_mysql_options(settings),
     )
 
+    # Determine fresh-vs-existing ONCE, before the main run creates alembic_version.
+    # A fresh database has its whole schema (main + extension tables, which share the
+    # same metadata) materialised by metadata.create_all, so both the main project and
+    # every extension stamp their head instead of replaying migrations against
+    # already-current tables.
+    with engine.connect() as conn:
+        fresh_db = not conn.execute(
+            text(
+                "SELECT COUNT(*) FROM information_schema.tables "
+                "WHERE table_schema = DATABASE() AND table_name = 'alembic_version'"
+            ),
+        ).scalar()
+
     # 1. Main-project migrations
-    _run_with_advisory_lock(engine, "alembic_main", _run_main_migrations)
+    _run_with_advisory_lock(engine, "alembic_main", lambda eng: _run_main_migrations(eng, fresh_db))
 
     # 2. Extension-project migrations (discovered via entry points)
     try:
@@ -326,7 +354,7 @@ def run_migrations(settings: Settings):
             _run_with_advisory_lock(
                 engine,
                 lock_name,
-                lambda eng, p=ext_alembic_path, n=entry_point.name: _run_extension_migrations(eng, p, n),
+                lambda eng, p=ext_alembic_path, n=entry_point.name: _run_extension_migrations(eng, p, n, fresh_db),
             )
         except Exception as error:
             log.error("Failed to run extension migrations for '%s': %s", entry_point.name, error)
