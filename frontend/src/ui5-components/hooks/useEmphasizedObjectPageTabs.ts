@@ -8,23 +8,28 @@ import { EMPHASIZED_OBJECT_PAGE_TABS_ATTRIBUTE } from '@/ui5-components/styles/E
 export const useEmphasizedObjectPageTabs = (pageId: string, updateKey?: string) => {
   useEffect(() => {
     const page = document.getElementById(pageId);
+    if (!page) return;
 
-    const markTabContainer = () => {
-      page
-        ?.querySelector('ui5-tabcontainer')
-        ?.setAttribute(EMPHASIZED_OBJECT_PAGE_TABS_ATTRIBUTE, '');
-    };
+    const observer = new MutationObserver(() => {
+      const tabContainer = page.querySelector('ui5-tabcontainer');
 
-    markTabContainer();
-    const animationFrameId = window.requestAnimationFrame(markTabContainer);
-    const observer = new MutationObserver(markTabContainer);
+      if (tabContainer && !tabContainer.hasAttribute(EMPHASIZED_OBJECT_PAGE_TABS_ATTRIBUTE)) {
+        tabContainer.setAttribute(EMPHASIZED_OBJECT_PAGE_TABS_ATTRIBUTE, '');
+        console.log('im Tabcointainer');
+        observer.disconnect();
+      }
+    });
 
-    if (page) {
-      observer.observe(page, { childList: true, subtree: true });
+    const existing = page.querySelector('ui5-tabcontainer');
+    if (existing && !existing.hasAttribute(EMPHASIZED_OBJECT_PAGE_TABS_ATTRIBUTE)) {
+      existing.setAttribute(EMPHASIZED_OBJECT_PAGE_TABS_ATTRIBUTE, '');
+      console.log('im existing');
+      return;
     }
 
+    observer.observe(page, { childList: true, subtree: true });
+
     return () => {
-      window.cancelAnimationFrame(animationFrameId);
       observer.disconnect();
     };
   }, [pageId, updateKey]);
