@@ -9,6 +9,7 @@ import datetime
 import hashlib
 import logging
 import uuid
+from copy import deepcopy
 from typing import Any, Literal
 
 from sqlalchemy.exc import NoResultFound
@@ -94,6 +95,15 @@ def start_workflow(
         raise UserMayNotStartWorkflowException()
 
     workflow = service_workflow.start_process(name=name, created_by=user_rep)
+
+    # A trusted, server-built seed (preserve_initial_unknown_fields) is the workflow's
+    # engine start data: seed it into the root task BEFORE run_workflow, so service tasks
+    # that run before the first user task already see it in task_data (Spiff propagates
+    # parent->child). Untrusted client start-form data (preserve=False) is NOT seeded here;
+    # it stays scoped to the first user task and is cleaned against that task's form below.
+    if initial_task_data is not None and preserve_initial_unknown_fields:
+        workflow.task_tree.set_data(**deepcopy(initial_task_data))
+
     service_workflow.run_workflow(workflow=workflow)
 
     copied_task_attachments: list[tuple[uuid.UUID, list[UploadedAttachmentRepresentation]]] = []

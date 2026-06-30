@@ -298,6 +298,37 @@ def test_change_creates_new_version(db_engine_ctx):
         assert {a["key"] for a in chain["actions"]} == {"edit"}
 
 
+def test_change_prefills_from_source_before_first_user_task(db_engine_ctx):
+    """A service task before the first user task already sees the action's ``source_id``.
+
+    The "edit" action seeds ``source_id`` (a server-set technical variable) into the
+    engine task data *before* ``run_workflow``, so the ``PrefillFromSource`` service
+    task — which runs before the first user task — can load the source row by
+    ``source_id`` and prefill ``category``, a field the action payload does not carry.
+    The edit form is therefore pre-populated with the record's current category.
+    """
+    with db_engine_ctx():
+        db = SessionLocal()
+        wf = _setup(db)
+        _create_record(wf, title="Lunch", amount=42.5, category="Food")
+
+        client = Client()
+        with override_get_user(client=client, user=wf.user("editor").user), disable_role_check(client):
+            record_id = _head_item(client)["data"]["id"]
+            change_id = _start_edit(client, record_id).json()["workflow_instance_id"]
+
+        _drop_read_snapshot(db)  # see the change instance the action endpoint just committed
+        ready = wf.user("editor").get_usertasks(uuid.UUID(change_id), 1)
+        data = ready[0].data
+        # The early service task saw the technical source_id in task_data ...
+        assert data["source_id"] == record_id
+        # ... and used it to prefill `category` from the source row (the payload omits it).
+        assert data["category"] == "Food"
+        # The action payload's own prefill still applies to the first form unchanged.
+        assert data["title"] == "Lunch"
+        assert data["amount"] == 42.5
+
+
 def test_change_ignores_injected_source_id(db_engine_ctx):
     """An injected ``source_id`` in the submission has no effect.
 

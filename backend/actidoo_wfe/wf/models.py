@@ -776,6 +776,18 @@ class VersionedMixin(DataModelMixin):
         sort_order=-95,
     )
 
+    @classmethod
+    def get_current_by_id(cls, db: Session, record_id: uuid.UUID | str):
+        """Return the current (head) version for ``record_id``, or ``None`` if absent.
+
+        Selects the row carrying ``is_current`` — the head of the version chain for the
+        stable id. ``record_id`` may be a ``uuid.UUID`` or its string form (e.g. a
+        ``source_id`` seed carried through the engine as task data).
+        """
+        if isinstance(record_id, str):
+            record_id = uuid.UUID(record_id)
+        return db.scalars(select(cls).where(cls.id == record_id, cls.is_current.is_(True))).one_or_none()
+
 
 class WorkflowManagedMixin(VersionedMixin):
     """Versioned data produced by a workflow and exposed via the BFF data API.
