@@ -1,67 +1,44 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2025 ActiDoo GmbH
 
-export interface TaskPrioritySettings {
-  enabled: boolean;
-  urgentHours: number;
-  criticalHours: number;
-}
+import type { WorkflowDeadline } from '@/models/models';
 
-export const DEFAULT_TASK_PRIORITY_SETTINGS: TaskPrioritySettings = {
-  enabled: true,
-  urgentHours: 7 * 24,
-  criticalHours: 14 * 24,
+export type TaskPriorityLevel = 'normal' | 'urgency' | 'critical';
+
+const getDateTimeValue = (value?: string | Date | null): number | undefined => {
+  if (!value) return undefined;
+  const date = new Date(value);
+  const time = date.getTime();
+  return Number.isNaN(time) ? undefined : time;
 };
 
-export const TASK_PRIORITY_SETTINGS_STORAGE_KEY = 'wfe.taskPrioritySettings';
-export const TASK_PRIORITY_SETTINGS_CHANGED_EVENT = 'wfe-task-priority-settings-changed';
-
-const toPositiveInteger = (value: unknown, fallback: number): number => {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return Math.max(1, Math.round(parsed));
+const normalizeDeadlineLevel = (level?: string | null): TaskPriorityLevel => {
+  if (level === 'critical' || level === 'urgency') return level;
+  return 'normal';
 };
 
-export const normalizeTaskPrioritySettings = (
-  value: Partial<TaskPrioritySettings> = {}
-): TaskPrioritySettings => {
-  const urgentHours = toPositiveInteger(
-    value.urgentHours,
-    DEFAULT_TASK_PRIORITY_SETTINGS.urgentHours
-  );
-  const criticalHours = toPositiveInteger(
-    value.criticalHours,
-    DEFAULT_TASK_PRIORITY_SETTINGS.criticalHours
-  );
+const priorityRank: Record<TaskPriorityLevel, 0 | 1 | 2> = {
+  normal: 0,
+  urgency: 1,
+  critical: 2,
+};
+
+export const getTaskPriorityMeta = (params: {
+  deadline?: WorkflowDeadline | null;
+  createdAt?: string | Date | null;
+  priorityDate?: string | Date | null;
+}): { level: TaskPriorityLevel; priority: 0 | 1 | 2; referenceTime: number } => {
+  const level = normalizeDeadlineLevel(params.deadline?.level);
+  const referenceTime =
+    getDateTimeValue(
+      level === 'critical' ? params.deadline?.critical_at : params.deadline?.urgency_at
+    ) ??
+    getDateTimeValue(params.priorityDate ?? params.createdAt) ??
+    0;
 
   return {
-    enabled: value.enabled ?? DEFAULT_TASK_PRIORITY_SETTINGS.enabled,
-    urgentHours,
-    criticalHours: criticalHours > urgentHours ? criticalHours : urgentHours + 1,
+    level,
+    priority: priorityRank[level],
+    referenceTime,
   };
-};
-
-export const getTaskPrioritySettings = (): TaskPrioritySettings => {
-  if (typeof window === 'undefined') return DEFAULT_TASK_PRIORITY_SETTINGS;
-
-  try {
-    const raw = window.localStorage.getItem(TASK_PRIORITY_SETTINGS_STORAGE_KEY);
-    if (!raw) return DEFAULT_TASK_PRIORITY_SETTINGS;
-    return normalizeTaskPrioritySettings(JSON.parse(raw) as Partial<TaskPrioritySettings>);
-  } catch {
-    return DEFAULT_TASK_PRIORITY_SETTINGS;
-  }
-};
-
-export const saveTaskPrioritySettings = (settings: TaskPrioritySettings): TaskPrioritySettings => {
-  const normalized = normalizeTaskPrioritySettings(settings);
-
-  if (typeof window !== 'undefined') {
-    window.localStorage.setItem(TASK_PRIORITY_SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
-    window.dispatchEvent(
-      new CustomEvent(TASK_PRIORITY_SETTINGS_CHANGED_EVENT, { detail: normalized })
-    );
-  }
-
-  return normalized;
 };

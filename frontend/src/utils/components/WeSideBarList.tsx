@@ -27,11 +27,7 @@ import '@ui5/webcomponents-icons/dist/search.js';
 import { WorkflowState } from '@/models/models';
 import { useTranslation } from '@/i18n';
 import { useInfiniteWorkflowInstances } from '@/utils/hooks/useInfiniteWorkflowInstances';
-import {
-  getTaskPrioritySettings,
-  TASK_PRIORITY_SETTINGS_CHANGED_EVENT,
-  type TaskPrioritySettings,
-} from '@/utils/taskPrioritySettings';
+import { getTaskPriorityMeta } from '@/utils/taskPrioritySettings';
 import {
   TASK_PRIORITY_CRITICAL_COLOR,
   TASK_PRIORITY_URGENT_COLOR,
@@ -46,33 +42,8 @@ interface WeSideBarListProps {
   /** Extra classes for the root element, e.g. responsive width/visibility. */
   className?: string;
 }
-type SidebarPriority = 0 | 1 | 2;
-
 const SEARCH_DEBOUNCE_MS = 300;
 const COMPLETED_COLOR = '#09AE3B';
-
-const getDateTimeValue = (value?: string | Date | null): number | undefined => {
-  if (!value) return undefined;
-  const date = new Date(value);
-  const time = date.getTime();
-  return Number.isNaN(time) ? undefined : time;
-};
-
-const getPriorityMeta = (
-  createdAt: string | Date | null | undefined,
-  settings: TaskPrioritySettings
-): { priority: SidebarPriority; createdAtTime: number } => {
-  const createdAtTime = getDateTimeValue(createdAt) ?? 0;
-  const ageInHours = createdAtTime > 0 ? (Date.now() - createdAtTime) / 36e5 : 0;
-
-  if (ageInHours >= settings.criticalHours) {
-    return { priority: 2, createdAtTime };
-  }
-  if (ageInHours >= settings.urgentHours) {
-    return { priority: 1, createdAtTime };
-  }
-  return { priority: 0, createdAtTime };
-};
 
 export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
   const { t, language } = useTranslation();
@@ -91,9 +62,6 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
 
   const [searchInput, setSearchInput] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [prioritySettings, setPrioritySettings] = useState<TaskPrioritySettings>(() =>
-    getTaskPrioritySettings()
-  );
 
   const CompletedIcon = () => (
     <Icon
@@ -102,23 +70,6 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
       style={{ color: COMPLETED_COLOR }}
     />
   );
-
-  useEffect(() => {
-    const handlePrioritySettingsChanged = () => {
-      setPrioritySettings(getTaskPrioritySettings());
-    };
-
-    window.addEventListener(TASK_PRIORITY_SETTINGS_CHANGED_EVENT, handlePrioritySettingsChanged);
-    window.addEventListener('storage', handlePrioritySettingsChanged);
-
-    return () => {
-      window.removeEventListener(
-        TASK_PRIORITY_SETTINGS_CHANGED_EVENT,
-        handlePrioritySettingsChanged
-      );
-      window.removeEventListener('storage', handlePrioritySettingsChanged);
-    };
-  }, []);
 
   // Debounce the search before hitting the backend.
   useEffect(() => {
@@ -134,24 +85,29 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
     useInfiniteWorkflowInstances(props.dataKey, props.state, debouncedSearch);
 
   const sortedItems = useMemo(() => {
-    if (props.state === WorkflowState.COMPLETED || !prioritySettings.enabled) return items;
+    if (props.state === WorkflowState.COMPLETED) return items;
 
     return [...items].sort((first, second) => {
-      const firstMeta = getPriorityMeta(first.priority_date ?? first.created_at, prioritySettings);
-      const secondMeta = getPriorityMeta(
-        second.priority_date ?? second.created_at,
-        prioritySettings
-      );
+      const firstMeta = getTaskPriorityMeta({
+        deadline: first.deadline,
+        priorityDate: first.priority_date,
+        createdAt: first.created_at,
+      });
+      const secondMeta = getTaskPriorityMeta({
+        deadline: second.deadline,
+        priorityDate: second.priority_date,
+        createdAt: second.created_at,
+      });
 
       if (firstMeta.priority !== secondMeta.priority) {
         return secondMeta.priority - firstMeta.priority;
       }
-      if (firstMeta.priority > 0 && firstMeta.createdAtTime !== secondMeta.createdAtTime) {
-        return firstMeta.createdAtTime - secondMeta.createdAtTime;
+      if (firstMeta.priority > 0 && firstMeta.referenceTime !== secondMeta.referenceTime) {
+        return firstMeta.referenceTime - secondMeta.referenceTime;
       }
       return 0;
     });
-  }, [items, prioritySettings, props.state]);
+  }, [items, props.state]);
 
   // Load the next page when the sentinel scrolls into view. The observer root is
   // the sidebar's own scroll container — with the viewport as root the 200px
@@ -312,10 +268,11 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
                     })
                   : undefined;
               const isDelegationHighlight = !!delegationTask;
-              const priorityMeta = getPriorityMeta(
-                instance.priority_date ?? instance.created_at,
-                prioritySettings
-              );
+              const priorityMeta = getTaskPriorityMeta({
+                deadline: instance.deadline,
+                priorityDate: instance.priority_date,
+                createdAt: instance.created_at,
+              });
               const taskCount = tasks?.length ?? 0;
               const suffix = taskCount > 1 ? (language === 'de' ? 'n' : 's') : '';
               const taskLabel =
@@ -340,9 +297,9 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
                           </Text>
                           {props.state === WorkflowState.COMPLETED ? (
                             <CompletedIcon />
-                          ) : !prioritySettings.enabled ? null : priorityMeta.priority === 2 ? (
+                          ) : priorityMeta.level === 'critical' ? (
                             <WePriorityClock hour={20} color={TASK_PRIORITY_CRITICAL_COLOR} />
-                          ) : priorityMeta.priority === 1 ? (
+                          ) : priorityMeta.level === 'urgency' ? (
                             <WePriorityClock hour={16} color={TASK_PRIORITY_URGENT_COLOR} />
                           ) : null}
                         </div>
