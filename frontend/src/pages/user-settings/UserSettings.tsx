@@ -6,7 +6,7 @@ import { useBlocker } from 'react-router-dom';
 
 import { PcPage } from '@/ui5-components';
 import '@ui5/webcomponents-icons/dist/save.js';
-import '@/styles/usersettings.css';
+import '@/styles/index.scss';
 import { WeDataKey } from '@/store/generic-data/setup';
 import { getRequest, postRequest } from '@/store/generic-data/actions';
 import { useDispatch, useSelector } from 'react-redux';
@@ -392,9 +392,8 @@ const UserSettings: React.FC = () => {
         </div>
       </div>
 
-      <div className="user-settings-footer">
+      <div className="footer-base fixed px-[6]">
         <Button
-          className="button-user-settings"
           icon="save"
           design={ButtonDesign.Emphasized}
           disabled={!isDirty || !!saving}
