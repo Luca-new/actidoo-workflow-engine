@@ -68,7 +68,7 @@ from actidoo_wfe.wf.types import (
     TimeEvent,
     UserRepresentation,
     UserTaskWithoutNestedAssignedUserRepresentation,
-    WorkflowDeadlineRepresentation,
+    TaskDeadlineRepresentation,
 )
 
 log = logging.getLogger(__name__)
@@ -513,49 +513,82 @@ def get_workflow_saved_minutes_per_instance_cached(name: str) -> int:
         return 10
 
 
-def _parse_optional_non_negative_int(raw: object, *, property_name: str, workflow_name: str) -> int | None:
+def _parse_optional_non_negative_int(raw: object, *, property_name: str, context: str) -> int | None:
     if raw is None or raw == "":
         return None
     try:
         value = int(raw)
     except (TypeError, ValueError):
-        log.warning("Workflow '%s' has invalid custom property '%s': %r", workflow_name, property_name, raw)
+        log.warning("%s has invalid custom property '%s': %r", context, property_name, raw)
         return None
     if value < 0:
-        log.warning("Workflow '%s' has negative custom property '%s': %r", workflow_name, property_name, raw)
+        log.warning("%s has negative custom property '%s': %r", context, property_name, raw)
         return None
     return value
 
 
-@cache
-def get_workflow_deadline_thresholds_cached(name: str) -> tuple[int | None, int | None]:
-    """Return workflow-level warning thresholds from BPMN custom properties.
-
-    In Camunda Modeler add Zeebe custom properties to the BPMN process:
-    ``urgency`` and/or ``critical``. Values are interpreted as days after the
-    workflow instance ``created_at`` timestamp.
-    """
-    assert name is not None and name != ""
-
-    try:
-        process = load_process_from_file(name=name)
-        custom_props = getattr(process.spec, "custom_props", {}) or {}
-    except Exception:
-        log.exception("Cannot get workflow deadline custom properties for workflow %s", name)
-        return None, None
-
+def _parse_task_deadline_thresholds_from_custom_props(custom_props: dict, *, context: str) -> tuple[int | None, int | None]:
     return (
-        _parse_optional_non_negative_int(custom_props.get("urgency"), property_name="urgency", workflow_name=name),
-        _parse_optional_non_negative_int(custom_props.get("critical"), property_name="critical", workflow_name=name),
+        _parse_optional_non_negative_int(custom_props.get("urgency"), property_name="urgency", context=context),
+        _parse_optional_non_negative_int(custom_props.get("critical"), property_name="critical", context=context),
     )
 
 
-def build_workflow_deadline(
+def get_task_deadline_thresholds(task: Task) -> tuple[int | None, int | None]:
+    """Return user-task warning thresholds from BPMN custom properties.
+
+    In Camunda Modeler add Zeebe custom properties to the user task:
+    ``urgency`` and/or ``critical``. Values are interpreted as days after the
+    task became ready (``WorkflowInstanceTask.created_at`` in read models).
+    """
+    return _parse_task_deadline_thresholds_from_custom_props(
+        _get_custom_props(task) or {},
+        context=f"Task '{task.task_spec.name}'",
+    )
+
+
+@cache
+def get_task_deadline_thresholds_cached(
     workflow_name: str,
+    task_name: str,
+    bpmn_id: str | None = None,
+) -> tuple[int | None, int | None]:
+    """Return user-task deadline thresholds from the BPMN definition.
+
+    The thresholds are not persisted in the database. They are read from the
+    user-task custom properties in the currently configured workflow definition.
+    """
+    assert workflow_name is not None and workflow_name != ""
+    assert task_name is not None and task_name != ""
+
+    try:
+        workflow = load_process_from_file(name=workflow_name)
+        specs = list(getattr(workflow.spec, "task_specs", {}).values())
+        specs.extend(
+            spec
+            for subprocess in getattr(workflow, "subprocess_specs", {}).values()
+            for spec in getattr(subprocess, "task_specs", {}).values()
+        )
+    except Exception:
+        log.exception("Cannot get task deadline custom properties for workflow %s task %s", workflow_name, task_name)
+        return None, None
+
+    for spec in specs:
+        if getattr(spec, "name", None) == task_name or (bpmn_id is not None and getattr(spec, "bpmn_id", None) == bpmn_id):
+            return _parse_task_deadline_thresholds_from_custom_props(
+                getattr(spec, "custom_props", {}) or {},
+                context=f"Workflow '{workflow_name}' task '{task_name}'",
+            )
+
+    return None, None
+
+
+def build_task_deadline(
     created_at: datetime.datetime,
+    urgency_days: int | None,
+    critical_days: int | None,
     now: datetime.datetime | None = None,
-) -> WorkflowDeadlineRepresentation | None:
-    urgency_days, critical_days = get_workflow_deadline_thresholds_cached(workflow_name)
+) -> TaskDeadlineRepresentation | None:
     if urgency_days is None and critical_days is None:
         return None
 
@@ -570,7 +603,7 @@ def build_workflow_deadline(
     elif urgency_at is not None and now >= urgency_at:
         level = "urgency"
 
-    return WorkflowDeadlineRepresentation(
+    return TaskDeadlineRepresentation(
         urgency_days=urgency_days,
         critical_days=critical_days,
         urgency_at=urgency_at,

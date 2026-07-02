@@ -24,7 +24,7 @@ import '@ui5/webcomponents-icons/dist/activity-2.js';
 import '@ui5/webcomponents-icons/dist/message-information.js';
 import '@ui5/webcomponents-icons/dist/accept.js';
 import '@ui5/webcomponents-icons/dist/search.js';
-import { WorkflowState } from '@/models/models';
+import { WorkflowState, type WorkflowDeadline } from '@/models/models';
 import { useTranslation } from '@/i18n';
 import { useInfiniteWorkflowInstances } from '@/utils/hooks/useInfiniteWorkflowInstances';
 import { getTaskPriorityMeta } from '@/utils/taskPrioritySettings';
@@ -54,6 +54,7 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
     subtitle?: string;
     startDate?: string;
     worfkFlowID: string;
+    deadLine?: string | null;
   } | null>(null);
 
   const infoPopoverRef = useRef<ResponsivePopoverDomRef | null>(null);
@@ -157,6 +158,20 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
     }).format(date);
   };
 
+  const formatDeadlineInfo = (deadline?: WorkflowDeadline | null): string => {
+    if (deadline?.level === 'urgency') {
+      const urgencyAt = formatDateTime(deadline.urgency_at);
+      return urgencyAt ? `${t('sidebar.urgency')}${urgencyAt}` : '-';
+    }
+
+    if (deadline?.level === 'critical') {
+      const criticalAt = formatDateTime(deadline.critical_at);
+      return criticalAt ? `${t('sidebar.critical')}${criticalAt}` : '-';
+    }
+
+    return '-';
+  };
+
   const searchBar = (
     <div className="sticky top-0 z-10 bg-white p-2 border-b border-neutral-200">
       <Input
@@ -215,7 +230,11 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
       ref={containerRef}
       className={`absolute top-0 bottom-0 overflow-y-auto bg-white ${props.className ?? ''}`}>
       {searchBar}
-      <ResponsivePopover ref={infoPopoverRef} headerText={infoContent?.title} placementType="Right">
+      <ResponsivePopover
+        ref={infoPopoverRef}
+        headerText={infoContent?.title}
+        placementType="Right"
+        className="mt-[45px] ml-1">
         <div className="flex flex-col">
           {infoContent?.startDate && (
             <div className="flex flex-col gap-1 mb-4">
@@ -230,13 +249,17 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
             <Text className="!text-xs !text-neutral-600">{infoContent?.subtitle ?? '-'}</Text>
           </div>
           {infoContent?.worfkFlowID && (
-            <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-1 !max-w-[250px] !break-words mb-4">
               <Text className="!text-xs !font-bold !text-neutral-700">
                 {t('sidebar.workFlowInstanceID')}
               </Text>
               <Text className="!text-xs !text-neutral-600">{infoContent?.worfkFlowID}</Text>
             </div>
           )}
+          <div className="flex flex-col gap-1">
+            <Text className="!text-xs !font-bold !text-neutral-700">{t('sidebar.deadline')}</Text>
+            <Text className="!text-xs !text-neutral-600">{infoContent?.deadLine ?? '-'}</Text>
+          </div>
         </div>
       </ResponsivePopover>
       {loadingInitial ? (
@@ -321,6 +344,7 @@ export const WeSideBarList: React.FC<WeSideBarListProps> = props => {
                             subtitle: instance.subtitle ?? undefined,
                             startDate: formatDateTime(instance.created_at),
                             worfkFlowID: instance.id,
+                            deadLine: formatDeadlineInfo(instance.deadline),
                           });
                           void infoPopoverRef.current?.showAt(event.currentTarget, true);
                         }}

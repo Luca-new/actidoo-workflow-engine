@@ -38,6 +38,7 @@ export interface UserTask {
   completed_by_delegate_user?: { id: string; full_name: string } | null;
   delegate_submit_comment?: string | null;
   is_readonly?: boolean;
+  deadline?: WorkflowDeadline | null;
 }
 
 export interface WorkflowInstanceMeta {
@@ -163,6 +164,7 @@ export interface ActiveTaskInstance {
   can_be_assigned_as_delegate?: boolean;
   created_at?: string | Date;
   is_readonly?: boolean;
+  deadline?: WorkflowDeadline | null;
 }
 
 export interface TaskItem {
@@ -190,6 +192,7 @@ export interface TaskItem {
   workflow_instance?: WorkflowInstance;
   error_stacktrace?: string;
   is_readonly?: boolean;
+  deadline?: WorkflowDeadline | null;
 }
 
 export interface User {

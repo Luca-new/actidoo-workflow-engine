@@ -80,6 +80,7 @@ class GetAllTasksResponseItem(BaseModel):
     workflow_instance: InlineWorkflowInstance
     error_stacktrace: str | None
     is_readonly: bool = Field(default=False)
+    deadline: WorkflowDeadlineResponse | None = None
 
 
 GetAllTasksResponse = PaginatedDataSchema[GetAllTasksResponseItem]
